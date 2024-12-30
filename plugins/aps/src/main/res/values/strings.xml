@@ -432,6 +432,8 @@
     <string name="new_UAMBoostDrempel_summary">Instelbaar tussen 0,8 en 1,2 mmol/l. Bij lagere drempel zal de boost eerder worden ingeschakeld</string>
     <string name="new_UAMBoostDrempel_title">∆15 drempel</string>
 
+    <string name="ISF_Perc_summary">Kracht van de dynamische ISF. Groter dan 100% geeft meer insuline en dus lager ISF.</string>
+    <string name="ISF_Perc_title">Dynamisch ISF sterkte (%)</string>
     <string name="standaard_TDD_summary">Het gemiddelde dagelijkse aantal TDD eenheden. Wordt gebruikt als realtime data ontbreekt (10 tot 75).</string>
     <string name="standaard_TDD_title">dagelijks gemiddeld TDD</string>
     <string name="basaal_TDDPerc_summary">Het deel van de TDD wat wordt gebruikt als basaal (25% tot 75%).</string>
@@ -498,7 +500,7 @@
     <string name="Info_origineel">● Originele instellingen van het openApsSMB algoritme:\n 1. ........\n 2. ..........</string>
     <string name="DynSMB">Auto UAM</string>
     <string name="description_DynSmb">Aangepast OpenAPS SMB voor UAM</string>
-    <string name="DynBasaal">Auto Basaal</string>
-    <string name="description_DynBasaal">Aangepast OpenAPS SMB voor dynamisch basaal</string>
+    <string name="DynBasaal">Dynamic</string>
+    <string name="description_DynBasaal">Aangepast OpenAPS voor dynamisch basaal en ISF</string>
 
 </resources>

@@ -359,7 +359,7 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
                 ToastUtils.errorToast(this, "Permission to manage files is required for this app to work.")
             } else {
                 // La permission est accordée, continuez normalement
-                ToastUtils.okToast(this, "Permission granted. Thank you!")
+                ToastUtils.okToast(this, "Permission granted.")
             }
         }
         if (config.appInitialized) binding.splash.visibility = View.GONE

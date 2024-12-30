@@ -97,6 +97,7 @@ enum class IntKey(
     hypoPerc("hypoPerc", 50,10,100),
     BgIOBPerc("BgIOBPerc", 100,100,200),
 
+    ISF_Perc("ISF_Perc", 100,25,200),
     basaal_TDDPerc("basaal_TDDPerc", 50,25,75),
     TDD_weegfactor("TDD_weegfactor", 2,1,3),
     min_resistentiePerc("min_resistentiePerc", 80,10,100),

@@ -44,6 +44,7 @@ data class APSResult(
         AMA,
         SMB,
         AIMI,
-        AUTO_ISF
+        AUTO_ISF,
+        DYNBASAAL
     }
 }

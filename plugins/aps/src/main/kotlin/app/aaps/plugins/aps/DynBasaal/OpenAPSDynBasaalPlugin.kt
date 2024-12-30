@@ -20,7 +20,7 @@ import app.aaps.core.interfaces.aps.APS
 import app.aaps.core.interfaces.aps.APSResult
 import app.aaps.core.interfaces.aps.AutosensResult
 import app.aaps.core.interfaces.aps.CurrentTemp
-import app.aaps.core.interfaces.aps.OapsProfile
+import app.aaps.core.interfaces.aps.OapsProfileDynamic
 import app.aaps.core.interfaces.bgQualityCheck.BgQualityCheck
 import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.constraints.Constraint
@@ -70,22 +70,28 @@ import app.aaps.core.validators.preferences.AdaptiveIntPreference
 import app.aaps.core.validators.preferences.AdaptiveIntentPreference
 import app.aaps.core.validators.preferences.AdaptiveStringPreference
 import app.aaps.core.validators.preferences.AdaptiveSwitchPreference
-import app.aaps.core.validators.preferences.AdaptiveUnitPreference
 import app.aaps.plugins.aps.OpenAPSFragment
 import app.aaps.plugins.aps.R
 import app.aaps.plugins.aps.events.EventOpenAPSUpdateGui
 import app.aaps.plugins.aps.events.EventResetOpenAPSGui
 import app.aaps.plugins.aps.openAPS.TddStatus
 import app.aaps.plugins.aps.openAPSSMB.DetermineBasalDynBasaal
+import app.aaps.plugins.aps.openAPSSMB.uur_minuut
 import dagger.android.HasAndroidInjector
 import org.json.JSONObject
+import java.util.Calendar
 
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.floor
 import kotlin.math.ln
+import kotlin.math.pow
+import kotlin.math.sqrt
 
 @Singleton
+data class gemTDD_class(val GemTDD: Double, val TTD_log: String)
+data class Resistentie_class(val resistentie: Double, val log: String)
+
 open class OpenAPSDynBasaalPlugin @Inject constructor(
     private val injector: HasAndroidInjector,
     aapsLogger: AAPSLogger,
@@ -108,6 +114,8 @@ open class OpenAPSDynBasaalPlugin @Inject constructor(
     private val uiInteraction: UiInteraction,
     private val determineBasalDynBasaal: DetermineBasalDynBasaal,
     private val profiler: Profiler,
+
+
 ) : PluginBase(
     PluginDescription()
         .mainType(PluginType.APS)
@@ -284,8 +292,223 @@ open class OpenAPSDynBasaalPlugin @Inject constructor(
         var tdd7DDataCarbs = 0.0
         var tdd7DAllDaysHaveCarbs = false
 
+
+
         fun tddPartsCalculated() = tdd1D != null && tdd7D != null && tddLast24H != null && tddLast4H != null && tddLast8to4H != null
     }
+
+    fun round(value: Double, digits: Int): Double {
+        if (value.isNaN()) return Double.NaN
+        val scale = 10.0.pow(digits.toDouble())
+        return Math.round(value * scale) / scale
+    }
+
+    fun refreshTime() : uur_minuut {
+        val calendarInstance = Calendar.getInstance() // Nieuwe tijd ophalen
+
+        val uur = calendarInstance[Calendar.HOUR_OF_DAY]
+        val minuut = calendarInstance[Calendar.MINUTE]
+        return uur_minuut(uur,minuut)
+    }
+
+    fun calculateCorrectionFactor(bgGem: Double, targetProfiel: Double, macht: Double): Double {
+        var cf = Math.pow(bgGem / (targetProfiel / 18), macht)
+        if (cf < 0.1) cf = 1.0
+
+        return cf
+    }
+
+    fun logBgHistory(startHour: Long, endHour: Long, uren: Long): Double {
+
+        //    val dateFormat = SimpleDateFormat("dd-MM-yyyy HH:mm:ss", Locale.getDefault())
+        val startTime = dateUtil.now() - T.hours(hour = startHour).msecs()
+        val endTime = dateUtil.now() - T.hours(hour = endHour).msecs()
+
+        val bgReadings = persistenceLayer.getBgReadingsDataFromTimeToTime(startTime, endTime, false)
+        var bgAverage = 0.0
+        if (bgReadings.size >= 8 * uren) {
+            bgAverage = (bgReadings.sumOf { it.value }) / (bgReadings.size * 18)
+        }
+
+        return bgAverage
+    }
+    // Functie om te controleren of de huidige tijd binnen het tijdsbereik valt
+    fun isInTijdBereik(hh: Int, mm: Int, startUur: Int, startMinuut: Int, eindUur: Int, eindMinuut: Int): Boolean {
+        val startInMinuten = startUur * 60 + startMinuut
+        val eindInMinuten = eindUur * 60 + eindMinuut
+        val huidigeTijdInMinuten = hh * 60 + mm
+
+        // Als het eindtijdstip voor middernacht is (bijvoorbeeld van 23:00 tot 05:00), moeten we dat apart behandelen
+        return if (eindInMinuten < startInMinuten) {
+            // Tijdsbereik over de middernacht (bijvoorbeeld 23:00 tot 05:00)
+            huidigeTijdInMinuten >= startInMinuten || huidigeTijdInMinuten < eindInMinuten
+        } else {
+            // Normale tijdsbereik (bijvoorbeeld van 08:00 tot 17:00)
+            huidigeTijdInMinuten in startInMinuten..eindInMinuten
+        }
+    }
+    fun GemTDD(): gemTDD_class {
+        val standaardTDD = preferences.get(DoubleKey.standaard_TDD)
+        var tddlaatste24uur = tddCalculator.calculateInterval(dateUtil.now()- T.hours(hour = 24).msecs(),dateUtil.now(),true)?.totalAmount ?: 0.0
+        if (tddlaatste24uur < 15.0) {tddlaatste24uur = standaardTDD}
+        var tddlaatste12uur = tddCalculator.calculateInterval(dateUtil.now()- T.hours(hour = 12).msecs(),dateUtil.now(),true)?.totalAmount ?: 0.0
+        if (tddlaatste12uur < 7.5) {tddlaatste12uur = standaardTDD/2}
+        var tddlaatste6uur = tddCalculator.calculateInterval(dateUtil.now()- T.hours(hour = 6).msecs(),dateUtil.now(),true)?.totalAmount ?: 0.0
+        if (tddlaatste6uur < 3.75) {tddlaatste6uur = standaardTDD/4}
+
+
+        val TTD_weegFactor = preferences.get(IntKey.TDD_weegfactor)
+        var gemTDD: Double
+        val tdd_perc = preferences.get(IntKey.basaal_TDDPerc)
+
+        var basaal_log = " ● Basaal tov TDD: " + tdd_perc + "%" + "\n"
+        basaal_log += "  → 24 uur: " + round(tddlaatste24uur/24*tdd_perc.toDouble()/100,2) + "\n"
+        basaal_log += "  → 12 uur: " + round(tddlaatste12uur/12*tdd_perc.toDouble()/100,2) + "\n"
+        basaal_log += "  →  6 uur: " + round(tddlaatste6uur/6*tdd_perc.toDouble()/100,2) + "\n"
+
+// Bereken gewogen gemiddelde direct, zonder extra datastructuren
+        gemTDD = when (TTD_weegFactor) {
+            1 -> (1 * tddlaatste24uur / 24 + 2 * tddlaatste12uur / 12 + 3 * tddlaatste6uur / 6) / 6.0
+            2 -> (2 * tddlaatste24uur / 24 + 2 * tddlaatste12uur / 12 + 2 * tddlaatste6uur / 6) / 6.0
+            3 -> (3 * tddlaatste24uur / 24 + 2 * tddlaatste12uur / 12 + 1 * tddlaatste6uur / 6) / 6.0
+            else -> standaardTDD/24 // Standaardwaarde als TTD_weegFactor ongeldige waarde heeft
+        }
+
+       return gemTDD_class(gemTDD,basaal_log)
+    }
+
+    fun DynamischISF(): Double {
+
+        val p6 = -0.00000224
+        val p5 = 0.0001678
+        val p4 = -0.004554
+        val p3 = 0.0520856
+        val p2 = -0.208936
+        val p1 = 0.1624322
+
+        val (uurVanDag,minuten) = refreshTime()
+        val (GemTDD,TDD_log) = GemTDD()
+        val TijdNu = uurVanDag.toDouble() + minuten.toDouble()/60
+        val BasisISF = 30 / sqrt(GemTDD * 24 )
+
+        var DynISF = (((((p6 * TijdNu + p5) * TijdNu + p4) * TijdNu + p3) * TijdNu + p2) * TijdNu + p1) * TijdNu + BasisISF
+        val (res,log) = Resistentie()
+
+        DynISF = DynISF * res
+        DynISF = DynISF * 100 / preferences.get(IntKey.ISF_Perc).toDouble()
+
+      return DynISF
+    }
+
+
+
+    fun DynamischBasaal(): Double {
+
+        val p6 = 0.0000000928
+        val p5 = -0.000006986
+        val p4 = 0.0001958
+        val p3 = -0.002388
+        val p2 = 0.0119596
+        val p1 = -0.0406674
+
+
+// Pas basaalpercentage toe
+        val (GemTDD,TDD_log) = GemTDD()
+        val gemTDD = GemTDD * preferences.get(IntKey.basaal_TDDPerc).toDouble() / 100
+        val (uurVanDag,minuten) = refreshTime()
+        val TijdNu = uurVanDag.toDouble() + minuten.toDouble()/60
+
+        //    var  Dyn_Basaal = p6*Math.pow(TijdNu,6.0) + p5*Math.pow(TijdNu,5.0) + p4*Math.pow(TijdNu,4.0) + p3*Math.pow(TijdNu,3.0)
+        //    Dyn_Basaal = Dyn_Basaal + p2*Math.pow(TijdNu,2.0) + p1*Math.pow(TijdNu,1.0) + gemTDD
+
+        var Dyn_Basaal = (((((p6 * TijdNu + p5) * TijdNu + p4) * TijdNu + p3) * TijdNu + p2) * TijdNu + p1) * TijdNu + gemTDD
+
+        val (res,log) = Resistentie()
+        Dyn_Basaal = Dyn_Basaal * res
+
+        return Dyn_Basaal.coerceIn(preferences.get(DoubleKey.min_basaal), preferences.get(DoubleKey.max_basaal))
+    }
+
+    fun Resistentie(): Resistentie_class {
+         var log_resistentie = ""
+
+        if (!preferences.get(BooleanKey.Resistentie)) {
+            log_resistentie = log_resistentie + " → Resistentie correctie uit " + "\n"
+            return Resistentie_class(1.0,log_resistentie)
+        }
+        log_resistentie = log_resistentie + " → Resistentie correctie aan " + "\n"
+
+        var ResistentieCfEff = 0.0
+        var resistentie_percentage = 100
+        val (uurVanDag,minuten) = refreshTime()
+
+        val (NachtStartUur, NachtStartMinuut) = preferences.get(StringKey.NachtStart).split(":").map { it.toInt() }
+        val (OchtendStartUur, OchtendStartMinuut) = preferences.get(StringKey.OchtendStart).split(":").map { it.toInt() }
+        if (isInTijdBereik(uurVanDag, minuten, NachtStartUur, NachtStartMinuut, OchtendStartUur, OchtendStartMinuut)) {
+            resistentie_percentage = preferences.get(IntKey.nacht_resistentiePerc)
+            log_resistentie = log_resistentie + " ● Nacht: Resistentie sterkte: " + resistentie_percentage + "%" + "\n"
+        } else {
+            resistentie_percentage = preferences.get(IntKey.dag_resistentiePerc)
+            log_resistentie = log_resistentie + " ● Dag: Resistentie sterkte: " + resistentie_percentage + "%" + "\n"
+        }
+
+        var macht =  Math.pow(resistentie_percentage.toDouble(), 1.4)/2800
+
+        var target_profiel = 102.0  // 5,7 mmol/l
+
+        val numPairs = preferences.get(IntKey.Dagen_resistentie) // Hier kies je hoeveel paren je wilt gebruiken
+        val uren = preferences.get(IntKey.Uren_resistentie)
+
+        val x = uren.toLong()         // Constante waarde voor ± x
+        val intervals = mutableListOf<Pair<Long, Long>>()
+
+        for (i in 1..numPairs) {
+            val base = (24 * i).toLong()  // Verhoogt telkens met 24: 24, 48, 72, ...
+            intervals.add(Pair(base , base - x))
+        }
+
+        val correctionFactors = mutableListOf<Double>()
+
+        for ((index, interval) in intervals.take(numPairs).withIndex()) {
+            val bgGem = logBgHistory(interval.first, interval.second, x)
+            val cf = calculateCorrectionFactor(bgGem, target_profiel, macht)
+            log_resistentie = log_resistentie + " → Dag" + (index + 1) + ": Bg gem: " + round(bgGem, 1) + "→ perc = " + (cf * 100).toInt() + "%" + "\n"
+            correctionFactors.add(cf)
+
+        }
+// Bereken CfEff met het gekozen aantal correctiefactoren
+        var tot_gew_gem = 0
+        for (i in 0 until numPairs) {
+            val divisor = when (i) {
+                0   -> 60
+                1   -> 25
+                2   -> 10
+                3   -> 5
+                4   -> 3
+                5    -> 2
+                else -> 1 // Aanpassen voor extra correctiefactoren indien nodig
+            }
+            ResistentieCfEff += correctionFactors[i] * divisor
+            tot_gew_gem += divisor
+        }
+
+        ResistentieCfEff = ResistentieCfEff / tot_gew_gem.toDouble()
+
+        val minRes = preferences.get(IntKey.min_resistentiePerc).toDouble()/100
+        val maxRes = preferences.get(IntKey.max_resistentiePerc).toDouble()/100
+
+        ResistentieCfEff = ResistentieCfEff.coerceIn(minRes, maxRes)
+
+        if (ResistentieCfEff > minRes && ResistentieCfEff < maxRes){
+            log_resistentie = log_resistentie + " »» Cf_eff = " + (ResistentieCfEff * 100).toInt() + "%" + "\n"
+        } else {
+            log_resistentie = log_resistentie + " »» Cf_eff (begrensd) = " + (ResistentieCfEff * 100).toInt() + "%" + "\n"
+        }
+
+        return Resistentie_class(ResistentieCfEff,log_resistentie)
+
+    }
+
 
     private fun calculateRawDynIsf(multiplier: Double): DynIsfResult {
         val dynIsfResult = DynIsfResult()
@@ -444,8 +667,10 @@ open class OpenAPSDynBasaalPlugin @Inject constructor(
 
         val iobArray = iobCobCalculator.calculateIobArrayForSMB(autosensResult, SMBDefaults.exercise_mode, SMBDefaults.half_basal_exercise_target, isTempTarget)
         val mealData = iobCobCalculator.getMealDataWithWaitingForCalculationFinish()
-
-        val oapsProfile = OapsProfile(
+        //val dynBasaal = DynamischBasaal()
+        val (res,logRes) = Resistentie()
+        val (GemTDD,TDD_log) = GemTDD()
+        val oapsProfile = OapsProfileDynamic(
             dia = 0.0, // not used
             min_5m_carbimpact = 0.0, // not used
             max_iob = constraintsChecker.getMaxIOBAllowed().also { inputConstraints.copyReasons(it) }.value(),
@@ -454,34 +679,26 @@ open class OpenAPSDynBasaalPlugin @Inject constructor(
             min_bg = minBg,
             max_bg = maxBg,
             target_bg = targetBg,
-            carb_ratio = profile.getIc(),
+
             sens = profile.getIsfMgdl("OpenAPSDynBasaalPlugin"),
             autosens_adjust_targets = false, // not used
-            max_daily_safety_multiplier = 125.0, //preferences.get(DoubleKey.ApsMaxDailyMultiplier),
-            current_basal_safety_multiplier = 125.0, //preferences.get(DoubleKey.ApsMaxCurrentBasalMultiplier),
+
             lgsThreshold = profileUtil.convertToMgdlDetect(preferences.get(UnitDoubleKey.ApsLgsThreshold)).toInt(),
-            high_temptarget_raises_sensitivity = false,
-            low_temptarget_lowers_sensitivity = false,
-            sensitivity_raises_target = false, // preferences.get(BooleanKey.ApsSensitivityRaisesTarget),
-            resistance_lowers_target = false, //preferences.get(BooleanKey.ApsResistanceLowersTarget),
+
             adv_target_adjustments = SMBDefaults.adv_target_adjustments,
             exercise_mode = SMBDefaults.exercise_mode,
             half_basal_exercise_target = SMBDefaults.half_basal_exercise_target,
-            maxCOB = SMBDefaults.maxCOB,
+
             skip_neutral_temps = pump.setNeutralTempAtFullHour(),
             remainingCarbsCap = SMBDefaults.remainingCarbsCap,
-            enableUAM = constraintsChecker.isUAMEnabled().also { inputConstraints.copyReasons(it) }.value(),
+
             A52_risk_enable = SMBDefaults.A52_risk_enable,
             SMBInterval = preferences.get(IntKey.ApsMaxSmbFrequency),
-            enableSMB_with_COB = smbEnabled && preferences.get(BooleanKey.ApsUseSmbWithCob),
-            enableSMB_with_temptarget = smbEnabled && preferences.get(BooleanKey.ApsUseSmbWithLowTt),
-            allowSMB_with_high_temptarget = smbEnabled && preferences.get(BooleanKey.ApsUseSmbWithHighTt),
-            enableSMB_always = smbEnabled && preferences.get(BooleanKey.ApsUseSmbAlways) && advancedFiltering,
-            enableSMB_after_carbs = smbEnabled && preferences.get(BooleanKey.ApsUseSmbAfterCarbs) && advancedFiltering,
+
             maxSMBBasalMinutes = preferences.get(IntKey.ApsMaxMinutesOfBasalToLimitSmb),
             maxUAMSMBBasalMinutes = preferences.get(IntKey.ApsUamMaxMinutesOfBasalToLimitSmb),
             bolus_increment = pump.pumpDescription.bolusStep,
-            carbsReqThreshold = preferences.get(IntKey.ApsCarbsRequestThreshold),
+
             current_basal = activePlugin.activePump.baseBasalRate,
             temptargetSet = isTempTarget,
             autosens_max = preferences.get(DoubleKey.AutosensMax),
@@ -510,6 +727,12 @@ open class OpenAPSDynBasaalPlugin @Inject constructor(
             TDDweegfactor = preferences.get(IntKey.TDD_weegfactor),
             minbasaal = preferences.get(DoubleKey.min_basaal),
             maxbasaal = preferences.get(DoubleKey.max_basaal),
+            dynBasaal = DynamischBasaal(),
+            gemTDD = GemTDD,
+            TDDLog = TDD_log,
+            dynISFperc = preferences.get(IntKey.ISF_Perc),
+            dynISF = DynamischISF(),
+            resistentie_log = logRes,
             resistentie = preferences.get(BooleanKey.Resistentie),
             minResistentiePerc = preferences.get(IntKey.min_resistentiePerc),
             maxResistentiePerc = preferences.get(IntKey.max_resistentiePerc),
@@ -568,7 +791,7 @@ open class OpenAPSDynBasaalPlugin @Inject constructor(
             determineBasalResult.iobData = iobArray
             determineBasalResult.glucoseStatus = glucoseStatus
             determineBasalResult.currentTemp = currentTemp
-            determineBasalResult.oapsProfile = oapsProfile
+            determineBasalResult.oapsProfileDynamic = oapsProfile
             determineBasalResult.mealData = mealData
             lastAPSResult = determineBasalResult
             lastAPSRun = now
@@ -709,25 +932,16 @@ open class OpenAPSDynBasaalPlugin @Inject constructor(
                     )
                 )
 
-                //  addPreference(AdaptiveSwitchPreference(ctx = context, booleanKey = BooleanKey.ApsUseDynamicSensitivity, summary = R.string.use_dynamic_sensitivity_summary, title = R.string.use_dynamic_sensitivity_title))
-                //         addPreference(AdaptiveSwitchPreference(ctx = context, booleanKey = BooleanKey.ApsUseAutosens, title = R.string.openapsama_use_autosens))
-                //  addPreference(AdaptiveIntPreference(ctx = context, intKey = IntKey.ApsDynIsfAdjustmentFactor, dialogMessage = R.string.dyn_isf_adjust_summary, title = R.string.dyn_isf_adjust_title))
-               // addPreference(AdaptiveUnitPreference(ctx = context, unitKey = UnitDoubleKey.ApsLgsThreshold, dialogMessage = R.string.lgs_threshold_summary, title = R.string.lgs_threshold_title))
-               //  addPreference(AdaptiveSwitchPreference(ctx = context, booleanKey = BooleanKey.ApsDynIsfAdjustSensitivity, summary = R.string.dynisf_adjust_sensitivity_summary, title = R.string.dynisf_adjust_sensitivity))
-               // addPreference(AdaptiveSwitchPreference(ctx = context, booleanKey = BooleanKey.ApsSensitivityRaisesTarget, summary = R.string.sensitivity_raises_target_summary, title = R.string.sensitivity_raises_target_title))
-               // addPreference(AdaptiveSwitchPreference(ctx = context, booleanKey = BooleanKey.ApsResistanceLowersTarget, summary = R.string.resistance_lowers_target_summary, title = R.string.resistance_lowers_target_title))
+
                 addPreference(AdaptiveSwitchPreference(ctx = context, booleanKey = BooleanKey.ApsUseAutosens, title = R.string.openapsama_use_autosens))
                 addPreference(AdaptiveSwitchPreference(ctx = context, booleanKey = BooleanKey.ApsUseSmb, summary = R.string.enable_smb_summary, title = R.string.enable_smb))
                 addPreference(AdaptiveSwitchPreference(ctx = context, booleanKey = BooleanKey.ApsUseSmbWithHighTt, summary = R.string.enable_smb_with_high_temp_target_summary, title = R.string.enable_smb_with_high_temp_target))
                 addPreference(AdaptiveSwitchPreference(ctx = context, booleanKey = BooleanKey.ApsUseSmbAlways, summary = R.string.enable_smb_always_summary, title = R.string.enable_smb_always))
-                // addPreference(AdaptiveSwitchPreference(ctx = context, booleanKey = BooleanKey.ApsUseSmbWithCob, summary = R.string.enable_smb_with_cob_summary, title = R.string.enable_smb_with_cob))
-                // addPreference(AdaptiveSwitchPreference(ctx = context, booleanKey = BooleanKey.ApsUseSmbWithLowTt, summary = R.string.enable_smb_with_temp_target_summary, title = R.string.enable_smb_with_temp_target))
-                // addPreference(AdaptiveSwitchPreference(ctx = context, booleanKey = BooleanKey.ApsUseSmbAfterCarbs, summary = R.string.enable_smb_after_carbs_summary, title = R.string.enable_smb_after_carbs))
-                // addPreference(AdaptiveSwitchPreference(ctx = context, booleanKey = BooleanKey.ApsUseUam, summary = R.string.enable_uam_summary, title = R.string.enable_uam))
+
                 addPreference(AdaptiveIntPreference(ctx = context, intKey = IntKey.ApsMaxSmbFrequency, title = R.string.smb_interval_summary))
                 addPreference(AdaptiveIntPreference(ctx = context, intKey = IntKey.ApsMaxMinutesOfBasalToLimitSmb, title = R.string.smb_max_minutes_summary))
                 addPreference(AdaptiveIntPreference(ctx = context, intKey = IntKey.ApsUamMaxMinutesOfBasalToLimitSmb, dialogMessage = R.string.uam_smb_max_minutes, title = R.string.uam_smb_max_minutes_summary))
-                // addPreference(AdaptiveIntPreference(ctx = context, intKey = IntKey.ApsCarbsRequestThreshold, dialogMessage = R.string.carbs_req_threshold_summary, title = R.string.carbs_req_threshold))
+
 
             })
 
@@ -806,8 +1020,8 @@ open class OpenAPSDynBasaalPlugin @Inject constructor(
             })
 
             addPreference(preferenceManager.createPreferenceScreen(context).apply {
-                key = "Dyn Basaal instelling"
-                title = "e). Dynamisch basaal instelling"
+                key = "Dyn ISF en Basaal instelling"
+                title = "e). Dynamisch ISF en basaal instelling"
                 addPreference(
                     AdaptiveIntentPreference(
                         ctx = context,
@@ -817,7 +1031,7 @@ open class OpenAPSDynBasaalPlugin @Inject constructor(
                     )
                 )
 
-
+                addPreference(AdaptiveIntPreference(ctx = context, intKey = IntKey.ISF_Perc, dialogMessage = R.string.ISF_Perc_summary, title = R.string.ISF_Perc_title))
                 addPreference(AdaptiveDoublePreference(ctx = context, doubleKey = DoubleKey.standaard_TDD, dialogMessage = R.string.standaard_TDD_summary, title = R.string.standaard_TDD_title))
                 addPreference(AdaptiveIntPreference(ctx = context, intKey = IntKey.basaal_TDDPerc, dialogMessage = R.string.basaal_TDDPerc_summary, title = R.string.basaal_TDDPerc_title))
                 addPreference(AdaptiveIntPreference(ctx = context, intKey = IntKey.TDD_weegfactor, dialogMessage = R.string.TDD_weegfactor_summary, title = R.string.TDD_weegfactor_title))
@@ -894,23 +1108,7 @@ open class OpenAPSDynBasaalPlugin @Inject constructor(
             })
 
 
-        /*    addPreference(preferenceManager.createPreferenceScreen(context).apply {
-                key = "absorption_smb_advanced"
-                title = rh.gs(app.aaps.core.ui.R.string.advanced_settings_title)
-                addPreference(
-                    AdaptiveIntentPreference(
-                        ctx = context,
-                        intentKey = IntentKey.ApsLinkToDocs,
-                        intent = Intent().apply { action = Intent.ACTION_VIEW; data = Uri.parse(rh.gs(R.string.openapsama_link_to_preference_json_doc)) },
-                        summary = R.string.openapsama_link_to_preference_json_doc_txt
-                    )
-                )
-                addPreference(AdaptiveSwitchPreference(ctx = context, booleanKey = BooleanKey.ApsAlwaysUseShortDeltas, summary = R.string.always_use_short_avg_summary, title = R.string.always_use_short_avg))
-                addPreference(AdaptiveDoublePreference(ctx = context, doubleKey = DoubleKey.ApsMaxDailyMultiplier, dialogMessage = R.string.openapsama_max_daily_safety_multiplier_summary, title = R.string.openapsama_max_daily_safety_multiplier))
-                addPreference(
-                    AdaptiveDoublePreference(ctx = context, doubleKey = DoubleKey.ApsMaxCurrentBasalMultiplier, dialogMessage = R.string.openapsama_current_basal_safety_multiplier_summary, title = R.string.openapsama_current_basal_safety_multiplier)
-                )
-            })  */
+
         }
     }
 

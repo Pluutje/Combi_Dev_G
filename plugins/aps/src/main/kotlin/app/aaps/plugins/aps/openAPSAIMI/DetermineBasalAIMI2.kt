@@ -1103,7 +1103,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                     while (currentEpoch < totalEpochs) {
                         val remainingEpochs = minOf(epochsPerIteration, totalEpochs - currentEpoch)
                         //neuralNetwork.train(trainingInputs, trainingTargets, validationInputs, validationTargets, remainingEpochs, learningRate)
-                        neuralNetwork.trainSimplified(trainingInputs, trainingTargets, epochs = remainingEpochs, batchSize = adjustedBatchSize)
+                        neuralNetwork!!.trainSimplified(trainingInputs, trainingTargets, epochs = remainingEpochs, batchSize = adjustedBatchSize)
 
                         learningRate *= decayFactor
                         currentEpoch += remainingEpochs

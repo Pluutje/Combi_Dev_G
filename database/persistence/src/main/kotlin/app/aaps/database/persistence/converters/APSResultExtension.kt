@@ -7,6 +7,7 @@ import app.aaps.core.interfaces.aps.GlucoseStatus
 import app.aaps.core.interfaces.aps.IobTotal
 import app.aaps.core.interfaces.aps.MealData
 import app.aaps.core.interfaces.aps.OapsProfile
+import app.aaps.core.interfaces.aps.OapsProfileDynamic
 import app.aaps.core.interfaces.aps.OapsProfileAimi
 import app.aaps.core.interfaces.aps.OapsProfileAutoIsf
 import app.aaps.core.interfaces.aps.RT
@@ -20,6 +21,7 @@ fun app.aaps.database.entities.APSResult.fromDb(injector: HasAndroidInjector): A
     when (algorithm) {
         app.aaps.database.entities.APSResult.Algorithm.AMA,
         app.aaps.database.entities.APSResult.Algorithm.SMB,
+        app.aaps.database.entities.APSResult.Algorithm.DYNBASAAL,
         app.aaps.database.entities.APSResult.Algorithm.AIMI ->
             DetermineBasalResult(injector, Json.decodeFromString(this.resultJson)).also { result ->
                 result.date = this.timestamp
@@ -51,6 +53,16 @@ fun app.aaps.database.entities.APSResult.fromDb(injector: HasAndroidInjector): A
                 result.mealData = this.mealDataJson?.let { Json.decodeFromString(it) }
                 result.autosensResult = this.autosensDataJson?.let { Json.decodeFromString(it) }
             }
+        app.aaps.database.entities.APSResult.Algorithm.DYNBASAAL ->
+            DetermineBasalResult(injector, Json.decodeFromString(this.resultJson)).also { result ->
+                result.date = this.timestamp
+                result.glucoseStatus = this.glucoseStatusJson?.let { Json.decodeFromString(it) }
+                result.currentTemp = this.currentTempJson?.let { Json.decodeFromString(it) }
+                result.iobData = this.iobDataJson?.let { Json.decodeFromString(it) }
+                result.oapsProfileDynamic = this.profileJson?.let { Json.decodeFromString(it) }
+                result.mealData = this.mealDataJson?.let { Json.decodeFromString(it) }
+                result.autosensResult = this.autosensDataJson?.let { Json.decodeFromString(it) }
+            }
 
         else                                                    -> error("Unsupported")
     }
@@ -60,6 +72,7 @@ fun APSResult.toDb(): app.aaps.database.entities.APSResult =
     when (algorithm) {
         APSResult.Algorithm.AMA,
         APSResult.Algorithm.SMB,
+        APSResult.Algorithm.DYNBASAAL,
         APSResult.Algorithm.AIMI ->
             app.aaps.database.entities.APSResult(
                 timestamp = this.date,
@@ -98,6 +111,18 @@ fun APSResult.toDb(): app.aaps.database.entities.APSResult =
                 autosensDataJson = this.autosensResult?.let { Json.encodeToString(AutosensResult.serializer(), it) },
                 resultJson = Json.encodeToString(RT.serializer(), this.rawData() as RT)
             )
+        APSResult.Algorithm.DYNBASAAL ->
+            app.aaps.database.entities.APSResult(
+                timestamp = this.date,
+                algorithm = this.algorithm.toDb(),
+                glucoseStatusJson = this.glucoseStatus?.let { Json.encodeToString(GlucoseStatus.serializer(), it) },
+                currentTempJson = this.currentTemp?.let { Json.encodeToString(CurrentTemp.serializer(), it) },
+                iobDataJson = this.iobData?.let { Json.encodeToString(ArraySerializer(IobTotal.serializer()), it) },
+                profileJson = this.oapsProfileDynamic?.let { Json.encodeToString(OapsProfileDynamic.serializer(), it) },
+                mealDataJson = this.mealData?.let { Json.encodeToString(MealData.serializer(), it) },
+                autosensDataJson = this.autosensResult?.let { Json.encodeToString(AutosensResult.serializer(), it) },
+                resultJson = Json.encodeToString(RT.serializer(), this.rawData() as RT)
+            )
 
         else                    -> error("Unsupported")
     }
@@ -107,6 +132,7 @@ fun app.aaps.database.entities.APSResult.Algorithm.fromDb(): APSResult.Algorithm
         app.aaps.database.entities.APSResult.Algorithm.AMA      -> APSResult.Algorithm.AMA
         app.aaps.database.entities.APSResult.Algorithm.SMB      -> APSResult.Algorithm.SMB
         app.aaps.database.entities.APSResult.Algorithm.AIMI      -> APSResult.Algorithm.AIMI
+        app.aaps.database.entities.APSResult.Algorithm.DYNBASAAL      -> APSResult.Algorithm.DYNBASAAL
         app.aaps.database.entities.APSResult.Algorithm.AUTO_ISF -> APSResult.Algorithm.AUTO_ISF
         else                                                    -> error("Unsupported")
     }
@@ -116,6 +142,7 @@ fun APSResult.Algorithm.toDb(): app.aaps.database.entities.APSResult.Algorithm =
         APSResult.Algorithm.AMA      -> app.aaps.database.entities.APSResult.Algorithm.AMA
         APSResult.Algorithm.SMB      -> app.aaps.database.entities.APSResult.Algorithm.SMB
         APSResult.Algorithm.AIMI -> app.aaps.database.entities.APSResult.Algorithm.AIMI
+        APSResult.Algorithm.DYNBASAAL -> app.aaps.database.entities.APSResult.Algorithm.DYNBASAAL
         APSResult.Algorithm.AUTO_ISF -> app.aaps.database.entities.APSResult.Algorithm.AUTO_ISF
         else                         -> error("Unsupported")
     }

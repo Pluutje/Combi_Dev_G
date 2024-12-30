@@ -636,7 +636,7 @@
     <string name="percent_rate_duration_formatted"><![CDATA[<b>Rate</b>: %1$.2f%% (%2$.2f U/h)<br><b>Duration</b>: %3$d min<br>]]></string>
     <string name="rate_percent_duration_formatted"><![CDATA[<b>Rate</b>: %1$.2f U/h (%2$.2f%%) <br><b>Duration</b>: %3$d min<br>]]></string>
     <!--    Eigen -->
-    <string name="Dynsmb_shortname">DynSMB</string>
-    <string name="DynBasaal_shortname">DynBasaal</string>
+    <string name="Dynsmb_shortname">SMB</string>
+    <string name="DynBasaal_shortname">Dynamic</string>
 
 </resources>

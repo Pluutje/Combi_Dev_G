@@ -1161,9 +1161,10 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
         if (variableSens != isfMgdl && variableSens != 0.0 && isfMgdl != null) {
             var text = if (ratioUsed != 1.0 && ratioUsed != lastAutosensData?.autosensResult?.ratio) String.format(Locale.getDefault(), "%.0f%%\n", ratioUsed * 100) else ""
             text += String.format(
-                //        Locale.getDefault(), "%1$.1f→%2$.1f (%3$.1f)",
-                Locale.getDefault(), "%1$.1f→%2$.1f",
-                profileUtil.fromMgdlToUnits(isfMgdl, profileFunction.getUnits()),
+                //        Locale.getDefault(), "%1$.1f→%2$.1f (%3$.1f)",  Thank you
+              //  Locale.getDefault(), "%1$.1f→%2$.1f",
+                Locale.getDefault(), "→%1$.1f",
+            //    profileUtil.fromMgdlToUnits(isfMgdl, profileFunction.getUnits()),
                 profileUtil.fromMgdlToUnits(variableSens, profileFunction.getUnits()),
                 //        profileUtil.fromMgdlToUnits(isfForCarbs ?: 0.0, profileFunction.getUnits())
             )
